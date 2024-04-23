@@ -129,7 +129,7 @@ fi
 echo "Sending output of the sam deploy command to $SAM_DEPLOY_OUTPUT. This is done to check the results after the command has completed."
 echo "This may take a while. Please be patient."
 sam deploy --s3-bucket $BOOTSTRAP_BUCKET_NAME \
---stack-name $SAM_STACK_NAME --capabilities CAPABILITY_NAMED_IAM --region $AWS_REGION $SAM_DEPLOY_PARAMETER_OVERRIDES > $SAM_DEPLOY_OUTPUT 2>&1 || true
+--stack-name $SAM_STACK_NAME --capabilities CAPABILITY_NAMED_IAM --disable-rollback --region $AWS_REGION $SAM_DEPLOY_PARAMETER_OVERRIDES > $SAM_DEPLOY_OUTPUT 2>&1 || true
 
 if [[ `grep "Successfully created/updated stack" $SAM_DEPLOY_OUTPUT` || `grep "Error: No changes to deploy" $SAM_DEPLOY_OUTPUT` ]]
 then
