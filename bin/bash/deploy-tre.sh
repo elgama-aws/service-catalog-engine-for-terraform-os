@@ -5,14 +5,19 @@ set -e
 # Execute script from project root dir
 
 usage() {
-  echo "Usage: $0 -r <region> [-e <service-catalog-endpoint>] [-s <service-catalog-ssl-verification>]"
+  echo "Usage: $0 -r <region> [-e <service-catalog-endpoint>] [-s <service-catalog-ssl-verification>] [-v <vpc-id>] [-p <private-subnet-id>] [-t <route-table-id>]"
   echo "-r AWS region is required."
   echo "-e sets the endpoint for calls to Service Catalog. If not present, uses the default endpoint for the region."
   echo "-s sets SSL verification for calls to Service Catalog. Allowed values are true|false. Default is true."
+  echo "-v sets the VPC ID for the Service Catalog engine. If not present, Creates a new VPC."
+  echo "-p sets the Private Subnet ID for the Service Catalog engine. If VPC ID is set, this is required. Up to 3 private subnets can be set."
+  echo "-t sets the Route Table ID for the Service Catalog engine. If VPC ID is set, this is required."
   exit 1; 
 }
 
-while getopts ":r:e:s:" opt
+SUBNETS=0
+
+while getopts ":r:e:s:v:p:t:" opt
 do
   case "$opt" in
     r)
@@ -24,6 +29,17 @@ do
     s)
       [[ $OPTARG == "true" || $OPTARG == "false" ]] || usage
       OVERRIDE_SERVICE_CATALOG_VERIFY_SSL="ParameterKey=ServiceCatalogVerifySsl,ParameterValue=$OPTARG"
+    ;;
+    v)
+      OVERRIDE_SERVICE_CATALOG_VPC="ParameterKey=VpcId,ParameterValue=$OPTARG"
+    ;;
+    p)
+      ((SUBNETS++))
+      [[ $SUBNETS -le 3 ]] || usage
+      OVERRIDE_SERVICE_CATALOG_PRIVATE_SUBNET="$OVERRIDE_SERVICE_CATALOG_PRIVATE_SUBNET ParameterKey=PrivateSubnet${SUBNETS}Id,ParameterValue=${OPTARG}"
+    ;;
+    t)
+      OVERRIDE_SERVICE_CATALOG_ROUTE_TABLE="ParameterKey=RouteTableId,ParameterValue=$OPTARG"
     ;;
     *)
       usage
@@ -102,7 +118,7 @@ else
 fi
 
 # Set up parameter overrides for sam deploy, if any are needed
-SERVICE_CATALOG_PARAMETER_OVERRIDES="$OVERRIDE_SERVICE_CATALOG_ENDPOINT $OVERRIDE_SERVICE_CATALOG_VERIFY_SSL"
+SERVICE_CATALOG_PARAMETER_OVERRIDES="$OVERRIDE_SERVICE_CATALOG_ENDPOINT $OVERRIDE_SERVICE_CATALOG_VERIFY_SSL $OVERRIDE_SERVICE_CATALOG_VPC $OVERRIDE_SERVICE_CATALOG_PRIVATE_SUBNET $OVERRIDE_SERVICE_CATALOG_ROUTE_TABLE"
 if [[ $SERVICE_CATALOG_PARAMETER_OVERRIDES =~ [A-Za-z] ]]
 then
   SAM_DEPLOY_PARAMETER_OVERRIDES="--parameter-overrides $SERVICE_CATALOG_PARAMETER_OVERRIDES"

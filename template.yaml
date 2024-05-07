@@ -28,6 +28,25 @@ Conditions:
     - { Ref: 'RIPMoreThan1AZParameter' }
     - 'true'
 
+  DeployStandaloneVPC:
+    Fn::Equals:
+      - { Ref: VpcId }
+      - 'None'
+
+  UseExistingVPC:
+    Fn::Not:
+      - { Condition: DeployStandaloneVPC }
+
+  MoreThan1AZAndDeployStandaloneVPC:
+    Fn::And:
+      - { Condition: MoreThan1AZ }
+      - { Condition: DeployStandaloneVPC }
+
+  MoreThan2AZsAndDeployStandaloneVPC:
+    Fn::And:
+      - { Condition: MoreThan2AZs }
+      - { Condition: DeployStandaloneVPC }
+
 Parameters:
   ServiceCatalogEndpoint:
     Default: ""
@@ -112,10 +131,83 @@ Parameters:
     Description: The type of EC2 instance used by the auto scaling group
     Type: String
 
+  VpcId:
+    Default: 'None'
+    Description: The The Id of the VPC to deploy the Terraform Engine into. If set to 'None', the Terraform Engine will deploy a new VPC.
+    Type: String
+
+  PrivateSubnet1Id:
+    Default: 'None'
+    Description: The The Id of the Private Subnet (1) in the provided VPC to deploy the Terraform Engine into. If a `VpcId` is provided, this parameter can not be set to 'None'.
+    Type: String
+
+  PrivateSubnet2Id:
+    Default: 'None'
+    Description: The The Id of the Private Subnet (2) in the provided VPC to deploy the Terraform Engine into. If a `VpcId` is provided, and `RIPMoreThan1AZParameter` is set to true, this parameter can not be set to 'None'.
+    Type: String
+
+  PrivateSubnet3Id:
+    Default: 'None'
+    Description: The The Id of the Private Subnet (3) in the provided VPC to deploy the Terraform Engine into. If a `VpcId` is provided, and `RIPMoreThan2AZsParameter` is set to true or in a 3AZs region, this parameter can not be set to 'None'.
+    Type: String
+
+  RouteTableId:
+    Default: 'None'
+    Description: The The Id of the Route Table to add routes use for S3 Gateway Endpoint, this has to be associated to all provided PrivateSubnets. If a `VpcId` is provided, this parameter can not be set to 'None'.
+    Type: String
+
+Rules:
+  DeployIntoAnExistingVPC:
+    RuleCondition: !Not [Fn::Equals: [!Ref VpcId, 'None']]
+    Assertions:
+      - Assert: !Not [Fn::Equals: [!Ref RouteTableId, 'None']]
+        AssertDescription: RouteTableId must be set when deploying into an existing VPC
+      - Assert: !Not [Fn::Equals: [!Ref PrivateSubnet1Id, 'None']]
+        AssertDescription: PrivateSubnet1Id must be set when deploying into an existing VPC
+      - Assert:
+          !Not
+            - Fn::And:
+              - Fn::Equals:
+                - !Ref PrivateSubnet2Id
+                - 'None'
+              - Fn::Equals:
+                - { Ref: 'RIPMoreThan1AZParameter' }
+                - 'true'
+        AssertDescription: PrivateSubnet2Id must be set when deploying into an existing VPC with more than 1 AZ
+      - Assert:
+          !Not
+            - Fn::And:
+              - Fn::Equals:
+                - !Ref PrivateSubnet3Id
+                - 'None'
+              - Fn::And:
+                - Fn::Equals:
+                  - { Ref: 'RIPMoreThan1AZParameter' }
+                  - 'true'
+                - Fn::Or:
+                  - Fn::Equals:
+                    - { Ref: 'AWS::Region' }
+                    - us-east-1
+                  - Fn::Equals:
+                    - { Ref: 'AWS::Region' }
+                    - us-west-2
+                  - Fn::Equals:
+                    - { Ref: 'AWS::Region' }
+                    - eu-west-1
+                  - Fn::Equals:
+                    - { Ref: 'AWS::Region' }
+                    - ap-southeast-2
+                  - Fn::Equals:
+                    - { Ref: 'RIPMoreThan2AZsParameter' }
+                    - 'true'
+        AssertDescription: PrivateSubnet3Id must be set when deploying into an existing VPC with more than 2 AZs
+
+
 Resources:
   # VPC for Terraform Reference Engine
   VPC:
     Type: AWS::EC2::VPC
+    Condition: DeployStandaloneVPC
     Properties:
       CidrBlock: !Ref VpcCidr
       EnableDnsHostnames: True
@@ -126,6 +218,7 @@ Resources:
           Value: TerraformEngineVpc
 
   InternetGateway:
+    Condition: DeployStandaloneVPC
     Type: AWS::EC2::InternetGateway
     Properties:
       Tags:
@@ -133,12 +226,14 @@ Resources:
           Value: TerraformEngineInternetGateway
 
   InternetGatewayAttachment:
+    Condition: DeployStandaloneVPC
     Type: AWS::EC2::VPCGatewayAttachment
     Properties:
       InternetGatewayId: !Ref InternetGateway
       VpcId: !Ref VPC
 
   NatGatewayFromPublicSubnet1:
+    Condition: DeployStandaloneVPC
     Type: 'AWS::EC2::NatGateway'
     Properties:
       Tags:
@@ -148,7 +243,7 @@ Resources:
       SubnetId: !Ref PublicSubnet1
       
   NatGatewayFromPublicSubnet2:
-    Condition: MoreThan1AZ
+    Condition: MoreThan1AZAndDeployStandaloneVPC
     Type: 'AWS::EC2::NatGateway'
     Properties:
       Tags:
@@ -158,7 +253,7 @@ Resources:
       SubnetId: !Ref PublicSubnet2
   
   NatGatewayFromPublicSubnet3:
-    Condition: MoreThan2AZs
+    Condition: MoreThan2AZsAndDeployStandaloneVPC
     Type: 'AWS::EC2::NatGateway'
     Properties:
       Tags:
@@ -168,24 +263,26 @@ Resources:
       SubnetId: !Ref PublicSubnet3
   
   ElasticIPAddress1:
+    Condition: DeployStandaloneVPC
     Type: 'AWS::EC2::EIP'
     Properties:
       Domain: vpc
   
   ElasticIPAddress2:
-    Condition: MoreThan1AZ
+    Condition: MoreThan1AZAndDeployStandaloneVPC
     Type: 'AWS::EC2::EIP'
     Properties:
       Domain: vpc
       
   ElasticIPAddress3:
-    Condition: MoreThan2AZs
+    Condition: MoreThan2AZsAndDeployStandaloneVPC
     Type: 'AWS::EC2::EIP'
     Properties:
       Domain: vpc
        
   # Create Public Subnets
   PublicSubnet1:
+    Condition: DeployStandaloneVPC
     Type: AWS::EC2::Subnet
     Properties:
       AvailabilityZone: !Select [ 0, !GetAZs '' ]
@@ -197,7 +294,7 @@ Resources:
       VpcId: !Ref VPC
 
   PublicSubnet2:
-    Condition: MoreThan1AZ
+    Condition: MoreThan1AZAndDeployStandaloneVPC
     Type: AWS::EC2::Subnet
     Properties:
       AvailabilityZone: !Select [ 1, !GetAZs '' ]
@@ -209,7 +306,7 @@ Resources:
       VpcId: !Ref VPC
 
   PublicSubnet3:
-    Condition: MoreThan2AZs
+    Condition: MoreThan2AZsAndDeployStandaloneVPC
     Type: AWS::EC2::Subnet
     Properties:
       AvailabilityZone: !Select [ 2, !GetAZs '' ]
@@ -222,6 +319,7 @@ Resources:
 
   # Create Public Route Table
   PublicRouteTable:
+    Condition: DeployStandaloneVPC
     Type: AWS::EC2::RouteTable
     DependsOn:
       - InternetGateway
@@ -233,6 +331,7 @@ Resources:
       VpcId: !Ref VPC
 
   PublicRoute:
+    Condition: DeployStandaloneVPC
     Type: AWS::EC2::Route
     DependsOn:
       - InternetGateway
@@ -244,20 +343,21 @@ Resources:
 
   # Associate Public Subnets
   PublicSubnet1RouteTableAssociation:
+    Condition: DeployStandaloneVPC
     Type: AWS::EC2::SubnetRouteTableAssociation
     Properties:
       RouteTableId: !Ref PublicRouteTable
       SubnetId: !Ref PublicSubnet1
 
   PublicSubnet2RouteTableAssociation:
-    Condition: MoreThan1AZ
+    Condition: MoreThan1AZAndDeployStandaloneVPC
     Type: AWS::EC2::SubnetRouteTableAssociation
     Properties:
       RouteTableId: !Ref PublicRouteTable
       SubnetId: !Ref PublicSubnet2
 
   PublicSubnet3RouteTableAssociation:
-    Condition: MoreThan2AZs
+    Condition: MoreThan2AZsAndDeployStandaloneVPC
     Type: AWS::EC2::SubnetRouteTableAssociation
     Properties:
       RouteTableId: !Ref PublicRouteTable
@@ -265,6 +365,7 @@ Resources:
 
   # Create Private Subnets
   PrivateSubnet1:
+    Condition: DeployStandaloneVPC
     Type: AWS::EC2::Subnet
     Properties:
       AvailabilityZone: !Select [ 0, !GetAZs '' ]
@@ -276,7 +377,7 @@ Resources:
       VpcId: !Ref VPC
 
   PrivateSubnet2:
-    Condition: MoreThan1AZ
+    Condition: MoreThan1AZAndDeployStandaloneVPC
     Type: AWS::EC2::Subnet
     Properties:
       AvailabilityZone: !Select [ 1, !GetAZs '' ]
@@ -288,7 +389,7 @@ Resources:
       VpcId: !Ref VPC
 
   PrivateSubnet3:
-    Condition: MoreThan2AZs
+    Condition: MoreThan2AZsAndDeployStandaloneVPC
     Type: AWS::EC2::Subnet
     Properties:
       AvailabilityZone: !Select [ 2, !GetAZs '' ]
@@ -301,6 +402,7 @@ Resources:
   
   # Create Private Route Table
   PrivateRouteTable1:
+    Condition: DeployStandaloneVPC
     Type: 'AWS::EC2::RouteTable'
     Properties:
       Tags:
@@ -309,7 +411,7 @@ Resources:
       VpcId: !Ref VPC
   
   PrivateRouteTable2:
-    Condition: MoreThan1AZ
+    Condition: MoreThan1AZAndDeployStandaloneVPC
     Type: 'AWS::EC2::RouteTable'
     Properties:
       Tags:
@@ -318,7 +420,7 @@ Resources:
       VpcId: !Ref VPC
   
   PrivateRouteTable3:
-    Condition: MoreThan2AZs
+    Condition: MoreThan2AZsAndDeployStandaloneVPC
     Type: 'AWS::EC2::RouteTable'
     Properties:
       Tags:
@@ -328,6 +430,7 @@ Resources:
 
   # Create Routes in Private Subnet Route Tables
   PrivateRoute1:
+    Condition: DeployStandaloneVPC
     Type: 'AWS::EC2::Route'
     Properties:
       RouteTableId: !Ref PrivateRouteTable1
@@ -335,7 +438,7 @@ Resources:
       NatGatewayId: !Ref NatGatewayFromPublicSubnet1
       
   PrivateRoute2:
-    Condition: MoreThan1AZ
+    Condition: MoreThan1AZAndDeployStandaloneVPC
     Type: 'AWS::EC2::Route'
     Properties:
       RouteTableId: !Ref PrivateRouteTable2
@@ -343,7 +446,7 @@ Resources:
       NatGatewayId: !Ref NatGatewayFromPublicSubnet2
 
   PrivateRoute3:
-    Condition: MoreThan2AZs
+    Condition: MoreThan2AZsAndDeployStandaloneVPC
     Type: 'AWS::EC2::Route'
     Properties:
       RouteTableId: !Ref PrivateRouteTable3
@@ -352,6 +455,7 @@ Resources:
       
   # Associate Private Subnets
   PrivateRouteTableAssociation1:
+    Condition: DeployStandaloneVPC
     Type: 'AWS::EC2::SubnetRouteTableAssociation'
     Properties:
       SubnetId: !Ref PrivateSubnet1
@@ -359,24 +463,42 @@ Resources:
   
   PrivateRouteTableAssociation2:
     Type: 'AWS::EC2::SubnetRouteTableAssociation'
-    Condition: MoreThan1AZ
+    Condition: MoreThan1AZAndDeployStandaloneVPC
     Properties:
       SubnetId: !Ref PrivateSubnet2
       RouteTableId: !Ref PrivateRouteTable2
       
   PrivateRouteTableAssociation3:
     Type: 'AWS::EC2::SubnetRouteTableAssociation'
-    Condition: MoreThan2AZs
+    Condition: MoreThan2AZsAndDeployStandaloneVPC
     Properties:
       SubnetId: !Ref PrivateSubnet3
       RouteTableId: !Ref PrivateRouteTable3
 
-  # Create Security Group
+  # Create Security Groups
+
+  LambdaSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Condition: UseExistingVPC
+    Properties:
+      GroupDescription: TerraformEngineLambdaSecurityGroup
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: '-1'
+          FromPort: -1
+          ToPort: -1
+          CidrIp: 0.0.0.0/0
+      SecurityGroupEgress:
+        - IpProtocol: '-1'
+          FromPort: -1
+          ToPort: -1
+          CidrIp: 0.0.0.0/0
+
   InstanceSecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
       GroupDescription: TerraformEngineInstanceSecurityGroup
-      VpcId: !Ref VPC
+      VpcId: !If [ DeployStandaloneVPC, !Ref VPC, !Ref VpcId ]
       SecurityGroupEgress:
         - IpProtocol: tcp
           FromPort: 80
@@ -390,7 +512,7 @@ Resources:
   S3GatewayEndpoint:
     Type: AWS::EC2::VPCEndpoint
     Properties:
-      VpcId: !Ref VPC
+      VpcId: !If [ DeployStandaloneVPC, !Ref VPC, !Ref VpcId ]
       VpcEndpointType: Gateway
       PolicyDocument:
         Statement:
@@ -399,7 +521,10 @@ Resources:
           Resource: '*'
           Principal: '*'
       RouteTableIds:
-        - !Ref PublicRouteTable
+        - !If
+          - DeployStandaloneVPC
+          - !Ref PublicRouteTable
+          - !Ref RouteTableId
       ServiceName: !Sub 'com.amazonaws.${AWS::Region}.s3'
 
   LoggingBucket:
@@ -535,28 +660,6 @@ Resources:
         Timeout: PT15M
     Properties:
       AutoScalingGroupName: TerraformAutoscalingGroup
-      AvailabilityZones: !If
-        - MoreThan2AZs
-        - - Fn::Select:
-              - 0
-              - Fn::GetAZs: !Ref 'AWS::Region'
-          - Fn::Select:
-              - 1
-              - Fn::GetAZs: !Ref 'AWS::Region'
-          - Fn::Select:
-              - 2
-              - Fn::GetAZs: !Ref 'AWS::Region'
-        - !If
-          - MoreThan1AZ
-          - - Fn::Select:
-                - 0
-                - Fn::GetAZs: !Ref 'AWS::Region'
-            - Fn::Select:
-                - 1
-                - Fn::GetAZs: !Ref 'AWS::Region'
-          - - Fn::Select:
-                - 0
-                - Fn::GetAZs: !Ref 'AWS::Region'
       LaunchTemplate:
         LaunchTemplateId: !Ref TerraformAutoScalingLaunchTemplate
         Version: !GetAtt TerraformAutoScalingLaunchTemplate.LatestVersionNumber
@@ -564,15 +667,27 @@ Resources:
       MinSize: 1
       DesiredCapacity: 1
       VPCZoneIdentifier: !If
+      - DeployStandaloneVPC
+      - !If
         - MoreThan2AZs
         - - !Ref PrivateSubnet1
           - !Ref PrivateSubnet2
           - !Ref PrivateSubnet3
         - !If
-            - MoreThan1AZ
-            - - !Ref PrivateSubnet1
-              - !Ref PrivateSubnet2
-            - - !Ref PrivateSubnet1
+          - MoreThan1AZ
+          - - !Ref PrivateSubnet1
+            - !Ref PrivateSubnet2
+          - - !Ref PrivateSubnet1
+      - !If
+        - MoreThan2AZs
+        - - !Ref PrivateSubnet1Id
+          - !Ref PrivateSubnet2Id
+          - !Ref PrivateSubnet3Id
+        - !If
+          - MoreThan1AZ
+          - - !Ref PrivateSubnet1Id
+            - !Ref PrivateSubnet2Id
+          - - !Ref PrivateSubnet1Id
       Tags:
         - Key: Name
           Value: TerraformEngineExecutionInstance
@@ -585,7 +700,6 @@ Resources:
       LaunchTemplateData:
         NetworkInterfaces:
           - DeviceIndex: 0
-            AssociatePublicIpAddress: true
             Groups:
               - !Ref InstanceSecurityGroup
             DeleteOnTermination: true
@@ -1039,17 +1153,32 @@ Resources:
       Handler: bootstrap
       VpcConfig:
         SubnetIds: !If
-          - MoreThan2AZs
-          - - !Ref PrivateSubnet1
-            - !Ref PrivateSubnet2
-            - !Ref PrivateSubnet3
+          - DeployStandaloneVPC
           - !If
-            - MoreThan1AZ
+            - MoreThan2AZs
             - - !Ref PrivateSubnet1
               - !Ref PrivateSubnet2
-            - - !Ref PrivateSubnet1
-        SecurityGroupIds:
-          - !GetAtt VPC.DefaultSecurityGroup
+              - !Ref PrivateSubnet3
+            - !If
+              - MoreThan1AZ
+              - - !Ref PrivateSubnet1
+                - !Ref PrivateSubnet2
+              - - !Ref PrivateSubnet1
+          - !If
+            - MoreThan2AZs
+            - - !Ref PrivateSubnet1Id
+              - !Ref PrivateSubnet2Id
+              - !Ref PrivateSubnet3Id
+            - !If
+              - MoreThan1AZ
+              - - !Ref PrivateSubnet1Id
+                - !Ref PrivateSubnet2Id
+              - - !Ref PrivateSubnet1Id
+        SecurityGroupIds: 
+          - !If
+            - DeployStandaloneVPC
+            - !GetAtt VPC.DefaultSecurityGroup
+            - !GetAtt LambdaSecurityGroup.GroupId
       Runtime: provided.al2
       Architectures:
         - x86_64
@@ -1070,17 +1199,32 @@ Resources:
       Handler: bootstrap
       VpcConfig:
         SubnetIds: !If
-          - MoreThan2AZs
-          - - !Ref PrivateSubnet1
-            - !Ref PrivateSubnet2
-            - !Ref PrivateSubnet3
+          - DeployStandaloneVPC
           - !If
-            - MoreThan1AZ
+            - MoreThan2AZs
             - - !Ref PrivateSubnet1
               - !Ref PrivateSubnet2
-            - - !Ref PrivateSubnet1
-        SecurityGroupIds:
-          - !GetAtt VPC.DefaultSecurityGroup
+              - !Ref PrivateSubnet3
+            - !If
+              - MoreThan1AZ
+              - - !Ref PrivateSubnet1
+                - !Ref PrivateSubnet2
+              - - !Ref PrivateSubnet1
+          - !If
+            - MoreThan2AZs
+            - - !Ref PrivateSubnet1Id
+              - !Ref PrivateSubnet2Id
+              - !Ref PrivateSubnet3Id
+            - !If
+              - MoreThan1AZ
+              - - !Ref PrivateSubnet1Id
+                - !Ref PrivateSubnet2Id
+              - - !Ref PrivateSubnet1Id
+        SecurityGroupIds: 
+          - !If
+            - DeployStandaloneVPC
+            - !GetAtt VPC.DefaultSecurityGroup
+            - !GetAtt LambdaSecurityGroup.GroupId
       Runtime: provided.al2
       Architectures:
         - x86_64
@@ -1241,6 +1385,7 @@ Resources:
   ManageProvisionedProductStateMachineLogGroup:
     Type: AWS::Logs::LogGroup
     Properties:
+      LogGroupName: "/aws/vendedlogs/states/ManageProvisionedProductStateMachine"
       RetentionInDays: 3653
     UpdateReplacePolicy: Retain
     DeletionPolicy: Retain
@@ -1315,6 +1460,7 @@ Resources:
   TerminateProvisionedProductStateMachineLogGroup:
     Type: AWS::Logs::LogGroup
     Properties:
+      LogGroupName: "/aws/vendedlogs/states/TerminateProvisionedProductStateMachine"
       RetentionInDays: 3653
     UpdateReplacePolicy: Retain
     DeletionPolicy: Retain
@@ -1333,17 +1479,32 @@ Resources:
           - Arn
       VpcConfig:
         SubnetIds: !If
-          - MoreThan2AZs
-          - - !Ref PrivateSubnet1
-            - !Ref PrivateSubnet2
-            - !Ref PrivateSubnet3
+          - DeployStandaloneVPC
           - !If
-            - MoreThan1AZ
+            - MoreThan2AZs
             - - !Ref PrivateSubnet1
               - !Ref PrivateSubnet2
-            - - !Ref PrivateSubnet1
-        SecurityGroupIds:
-          - !GetAtt VPC.DefaultSecurityGroup
+              - !Ref PrivateSubnet3
+            - !If
+              - MoreThan1AZ
+              - - !Ref PrivateSubnet1
+                - !Ref PrivateSubnet2
+              - - !Ref PrivateSubnet1
+          - !If
+            - MoreThan2AZs
+            - - !Ref PrivateSubnet1Id
+              - !Ref PrivateSubnet2Id
+              - !Ref PrivateSubnet3Id
+            - !If
+              - MoreThan1AZ
+              - - !Ref PrivateSubnet1Id
+                - !Ref PrivateSubnet2Id
+              - - !Ref PrivateSubnet1Id
+        SecurityGroupIds: 
+          - !If
+            - DeployStandaloneVPC
+            - !GetAtt VPC.DefaultSecurityGroup
+            - !GetAtt LambdaSecurityGroup.GroupId
       PackageType: Zip
       CodeUri: lambda-functions/state_machine_lambdas
       Handler: select_worker_host.select
@@ -1392,17 +1553,32 @@ Resources:
           - Arn
       VpcConfig:
         SubnetIds: !If
-          - MoreThan2AZs
-          - - !Ref PrivateSubnet1
-            - !Ref PrivateSubnet2
-            - !Ref PrivateSubnet3
+          - DeployStandaloneVPC
           - !If
-            - MoreThan1AZ
+            - MoreThan2AZs
             - - !Ref PrivateSubnet1
               - !Ref PrivateSubnet2
-            - - !Ref PrivateSubnet1
-        SecurityGroupIds:
-          - !GetAtt VPC.DefaultSecurityGroup
+              - !Ref PrivateSubnet3
+            - !If
+              - MoreThan1AZ
+              - - !Ref PrivateSubnet1
+                - !Ref PrivateSubnet2
+              - - !Ref PrivateSubnet1
+          - !If
+            - MoreThan2AZs
+            - - !Ref PrivateSubnet1Id
+              - !Ref PrivateSubnet2Id
+              - !Ref PrivateSubnet3Id
+            - !If
+              - MoreThan1AZ
+              - - !Ref PrivateSubnet1Id
+                - !Ref PrivateSubnet2Id
+              - - !Ref PrivateSubnet1Id
+        SecurityGroupIds: 
+          - !If
+            - DeployStandaloneVPC
+            - !GetAtt VPC.DefaultSecurityGroup
+            - !GetAtt LambdaSecurityGroup.GroupId
       PackageType: Zip
       CodeUri: lambda-functions/state_machine_lambdas
       Handler: get_state_file_outputs.parse
@@ -1464,17 +1640,32 @@ Resources:
           - Arn
       VpcConfig:
         SubnetIds: !If
-          - MoreThan2AZs
-          - - !Ref PrivateSubnet1
-            - !Ref PrivateSubnet2
-            - !Ref PrivateSubnet3
+          - DeployStandaloneVPC
           - !If
-            - MoreThan1AZ
+            - MoreThan2AZs
             - - !Ref PrivateSubnet1
               - !Ref PrivateSubnet2
-            - - !Ref PrivateSubnet1
-        SecurityGroupIds:
-          - !GetAtt VPC.DefaultSecurityGroup
+              - !Ref PrivateSubnet3
+            - !If
+              - MoreThan1AZ
+              - - !Ref PrivateSubnet1
+                - !Ref PrivateSubnet2
+              - - !Ref PrivateSubnet1
+          - !If
+            - MoreThan2AZs
+            - - !Ref PrivateSubnet1Id
+              - !Ref PrivateSubnet2Id
+              - !Ref PrivateSubnet3Id
+            - !If
+              - MoreThan1AZ
+              - - !Ref PrivateSubnet1Id
+                - !Ref PrivateSubnet2Id
+              - - !Ref PrivateSubnet1Id
+        SecurityGroupIds: 
+          - !If
+            - DeployStandaloneVPC
+            - !GetAtt VPC.DefaultSecurityGroup
+            - !GetAtt LambdaSecurityGroup.GroupId
       PackageType: Zip
       CodeUri: lambda-functions/state_machine_lambdas
       Handler: poll_command_invocation.poll
@@ -1525,17 +1716,32 @@ Resources:
       Handler: send_apply_command.send
       VpcConfig:
         SubnetIds: !If
-          - MoreThan2AZs
-          - - !Ref PrivateSubnet1
-            - !Ref PrivateSubnet2
-            - !Ref PrivateSubnet3
+          - DeployStandaloneVPC
           - !If
-            - MoreThan1AZ
+            - MoreThan2AZs
             - - !Ref PrivateSubnet1
               - !Ref PrivateSubnet2
-            - - !Ref PrivateSubnet1
-        SecurityGroupIds:
-          - !GetAtt VPC.DefaultSecurityGroup
+              - !Ref PrivateSubnet3
+            - !If
+              - MoreThan1AZ
+              - - !Ref PrivateSubnet1
+                - !Ref PrivateSubnet2
+              - - !Ref PrivateSubnet1
+          - !If
+            - MoreThan2AZs
+            - - !Ref PrivateSubnet1Id
+              - !Ref PrivateSubnet2Id
+              - !Ref PrivateSubnet3Id
+            - !If
+              - MoreThan1AZ
+              - - !Ref PrivateSubnet1Id
+                - !Ref PrivateSubnet2Id
+              - - !Ref PrivateSubnet1Id
+        SecurityGroupIds: 
+          - !If
+            - DeployStandaloneVPC
+            - !GetAtt VPC.DefaultSecurityGroup
+            - !GetAtt LambdaSecurityGroup.GroupId
       Runtime: python3.9
       Timeout: 60
       Environment:
@@ -1586,17 +1792,32 @@ Resources:
       Handler: notify_provision_result.notify
       VpcConfig:
         SubnetIds: !If
-          - MoreThan2AZs
-          - - !Ref PrivateSubnet1
-            - !Ref PrivateSubnet2
-            - !Ref PrivateSubnet3
+          - DeployStandaloneVPC
           - !If
-            - MoreThan1AZ
+            - MoreThan2AZs
             - - !Ref PrivateSubnet1
               - !Ref PrivateSubnet2
-            - - !Ref PrivateSubnet1
-        SecurityGroupIds:
-          - !GetAtt VPC.DefaultSecurityGroup
+              - !Ref PrivateSubnet3
+            - !If
+              - MoreThan1AZ
+              - - !Ref PrivateSubnet1
+                - !Ref PrivateSubnet2
+              - - !Ref PrivateSubnet1
+          - !If
+            - MoreThan2AZs
+            - - !Ref PrivateSubnet1Id
+              - !Ref PrivateSubnet2Id
+              - !Ref PrivateSubnet3Id
+            - !If
+              - MoreThan1AZ
+              - - !Ref PrivateSubnet1Id
+                - !Ref PrivateSubnet2Id
+              - - !Ref PrivateSubnet1Id
+        SecurityGroupIds: 
+          - !If
+            - DeployStandaloneVPC
+            - !GetAtt VPC.DefaultSecurityGroup
+            - !GetAtt LambdaSecurityGroup.GroupId
       Runtime: python3.9
       Environment:
         Variables:
@@ -1659,17 +1880,32 @@ Resources:
       Handler: notify_update_result.notify
       VpcConfig:
         SubnetIds: !If
-          - MoreThan2AZs
-          - - !Ref PrivateSubnet1
-            - !Ref PrivateSubnet2
-            - !Ref PrivateSubnet3
+          - DeployStandaloneVPC
           - !If
-            - MoreThan1AZ
+            - MoreThan2AZs
             - - !Ref PrivateSubnet1
               - !Ref PrivateSubnet2
-            - - !Ref PrivateSubnet1
-        SecurityGroupIds:
-          - !GetAtt VPC.DefaultSecurityGroup
+              - !Ref PrivateSubnet3
+            - !If
+              - MoreThan1AZ
+              - - !Ref PrivateSubnet1
+                - !Ref PrivateSubnet2
+              - - !Ref PrivateSubnet1
+          - !If
+            - MoreThan2AZs
+            - - !Ref PrivateSubnet1Id
+              - !Ref PrivateSubnet2Id
+              - !Ref PrivateSubnet3Id
+            - !If
+              - MoreThan1AZ
+              - - !Ref PrivateSubnet1Id
+                - !Ref PrivateSubnet2Id
+              - - !Ref PrivateSubnet1Id
+        SecurityGroupIds: 
+          - !If
+            - DeployStandaloneVPC
+            - !GetAtt VPC.DefaultSecurityGroup
+            - !GetAtt LambdaSecurityGroup.GroupId
       Runtime: python3.9
       Environment:
         Variables:
@@ -1732,17 +1968,32 @@ Resources:
       Handler: send_destroy_command.send
       VpcConfig:
         SubnetIds: !If
-          - MoreThan2AZs
-          - - !Ref PrivateSubnet1
-            - !Ref PrivateSubnet2
-            - !Ref PrivateSubnet3
+          - DeployStandaloneVPC
           - !If
-            - MoreThan1AZ
+            - MoreThan2AZs
             - - !Ref PrivateSubnet1
               - !Ref PrivateSubnet2
-            - - !Ref PrivateSubnet1
-        SecurityGroupIds:
-          - !GetAtt VPC.DefaultSecurityGroup
+              - !Ref PrivateSubnet3
+            - !If
+              - MoreThan1AZ
+              - - !Ref PrivateSubnet1
+                - !Ref PrivateSubnet2
+              - - !Ref PrivateSubnet1
+          - !If
+            - MoreThan2AZs
+            - - !Ref PrivateSubnet1Id
+              - !Ref PrivateSubnet2Id
+              - !Ref PrivateSubnet3Id
+            - !If
+              - MoreThan1AZ
+              - - !Ref PrivateSubnet1Id
+                - !Ref PrivateSubnet2Id
+              - - !Ref PrivateSubnet1Id
+        SecurityGroupIds: 
+          - !If
+            - DeployStandaloneVPC
+            - !GetAtt VPC.DefaultSecurityGroup
+            - !GetAtt LambdaSecurityGroup.GroupId
       Runtime: python3.9
       Environment:
         Variables:
@@ -1766,17 +2017,32 @@ Resources:
       Handler: notify_terminate_result.notify
       VpcConfig:
         SubnetIds: !If
-          - MoreThan2AZs
-          - - !Ref PrivateSubnet1
-            - !Ref PrivateSubnet2
-            - !Ref PrivateSubnet3
+          - DeployStandaloneVPC
           - !If
-            - MoreThan1AZ
+            - MoreThan2AZs
             - - !Ref PrivateSubnet1
               - !Ref PrivateSubnet2
-            - - !Ref PrivateSubnet1
-        SecurityGroupIds:
-          - !GetAtt VPC.DefaultSecurityGroup
+              - !Ref PrivateSubnet3
+            - !If
+              - MoreThan1AZ
+              - - !Ref PrivateSubnet1
+                - !Ref PrivateSubnet2
+              - - !Ref PrivateSubnet1
+          - !If
+            - MoreThan2AZs
+            - - !Ref PrivateSubnet1Id
+              - !Ref PrivateSubnet2Id
+              - !Ref PrivateSubnet3Id
+            - !If
+              - MoreThan1AZ
+              - - !Ref PrivateSubnet1Id
+                - !Ref PrivateSubnet2Id
+              - - !Ref PrivateSubnet1Id
+        SecurityGroupIds: 
+          - !If
+            - DeployStandaloneVPC
+            - !GetAtt VPC.DefaultSecurityGroup
+            - !GetAtt LambdaSecurityGroup.GroupId
       Runtime: python3.9
       Environment:
         Variables:
